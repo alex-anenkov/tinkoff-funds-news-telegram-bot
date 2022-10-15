@@ -6,34 +6,32 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 import threading
-import time
 import yaml
 from retrying import retry
 
-token = None
-admin_chat_id = None
+TOKEN = None
+ADMIN_CHAT_ID = None
+DOMAIN_NAME = 'https://www.tinkoff.ru'
+SUPPORTED_TICKERS = 'TRUR TUSD TEUR TBEU TSPX TECH TSOX TPAS TMOS TEUS TBRU TIPO TGLD TRRE TSPV TGRN TFNX TSST TEMS TCBR TBUY TBIO TRAI'
 
-with open("config.yaml", "r") as stream:
+with open('config.yaml', 'r') as stream:
     try:
         config = yaml.safe_load(stream)
-        token = config['token']
-        admin_chat_id = config['admin_chat_id']
+        TOKEN = config['token']
+        ADMIN_CHAT_ID = config['admin_chat_id']
     except yaml.YAMLError as e:
         print(e)
 
-bot = telebot.TeleBot(token)
+bot = telebot.TeleBot(TOKEN)
 db = sqlite3.connect('main.db', check_same_thread=False)
-db.execute("VACUUM")
+db.execute('VACUUM')
 db_cursor = db.cursor()
-
-domain_name = "https://www.tinkoff.ru"
-supported_tickers = "TRUR TUSD TEUR TBEU TSPX TECH TSOX TPAS TMOS TEUS TBRU TIPO TGLD TRRE TSPV TGRN TFNX TSST TEMS TCBR TBUY TBIO TRAI"
 
 def extract_args(arg):
     return arg.split()[1:]
 
 def create_users_db():
-    db_cursor.execute("CREATE TABLE IF NOT EXISTS Users (chat_id INTEGER PRIMARY KEY UNIQUE, user_name TEXT, reg_date DATE, \
+    db_cursor.execute('CREATE TABLE IF NOT EXISTS Users (chat_id INTEGER PRIMARY KEY UNIQUE, user_name TEXT, reg_date DATE, \
         TRUR_ticker BOOLEAN, \
         TUSD_ticker BOOLEAN,  \
         TEUR_ticker BOOLEAN,  \
@@ -57,10 +55,11 @@ def create_users_db():
         TBUY_ticker BOOLEAN,  \
         TBIO_ticker BOOLEAN,  \
         TRAI_ticker BOOLEAN  \
-        )")
+        )')
 
 def create_news_db():
-    db_cursor.execute("CREATE TABLE IF NOT EXISTS News (link STRING PRIMARY KEY UNIQUE, title STRING, announce STRING, date DATETIME, ticker STRING)")
+    db_cursor.execute('CREATE TABLE IF NOT EXISTS News \
+        (link STRING PRIMARY KEY UNIQUE, title STRING, announce STRING, date DATETIME, ticker STRING)')
 
 def create_db():
     create_users_db()
@@ -84,31 +83,32 @@ def delete_user_from_db(chat_id):
     db.commit()
 
 def print_users_table():
-    db_cursor.execute("SELECT * FROM Users ORDER BY user_name LIMIT 100")
+    db_cursor.execute('SELECT * FROM Users ORDER BY user_name LIMIT 100')
     results = db_cursor.fetchall()
     print(results)
 
 def print_news_table():
-    db_cursor.execute("SELECT * FROM News ORDER BY date LIMIT 100")
+    db_cursor.execute('SELECT * FROM News ORDER BY date LIMIT 100')
     results = db_cursor.fetchall()
     print(results)
 
 def insert_new_user_in_db(chat_id, user_name: str):
-    db_cursor.execute("INSERT OR IGNORE INTO Users (chat_id, user_name, reg_date) VALUES (?, ?, ?)", (str(chat_id), user_name, str(date.today())))
+    db_cursor.execute('INSERT OR IGNORE INTO Users (chat_id, user_name, reg_date) VALUES (?, ?, ?)',
+        (str(chat_id), user_name, str(date.today())))
     if db_cursor.rowcount > 0:
         print(f'Insert new user {chat_id}, {user_name}')
     db.commit()
 
 def set_user_ticker(chat_id, ticker: str, value):
-    db_ticker_name = ticker.upper() + "_ticker"
-    db_cursor.execute("UPDATE Users SET " + db_ticker_name + " = ? WHERE chat_id = ?", (bool(value), str(chat_id),))
+    db_ticker_name = f'{ticker.upper()}_ticker'
+    db_cursor.execute(f'UPDATE Users SET {db_ticker_name} = ? WHERE chat_id = ?', (bool(value), str(chat_id),))
     db.commit()
     if db_cursor.rowcount > 0:
         return True
     return False
 
 def is_supported_ticker(ticker: str):
-    if supported_tickers.upper().find(ticker.upper()) != -1:
+    if SUPPORTED_TICKERS.upper().find(ticker.upper()) != -1:
         return True
     return False
 
@@ -121,7 +121,7 @@ def send_news_message(chat_id, title: str, announce: str, link: str, ticker: str
     if 'дивиденды' in title:
         msg += ' #дивиденды'
     reply_markup=types.InlineKeyboardMarkup([
-        [types.InlineKeyboardButton(text='Open link', url=domain_name + link)],
+        [types.InlineKeyboardButton(text='Open link', url=DOMAIN_NAME + link)],
     ])
     bot.send_message(chat_id, text=msg, parse_mode='html', reply_markup=reply_markup)
 
@@ -132,7 +132,7 @@ def broadcast_news(user_list, title: str, announce: str, link: str, ticker: str)
         send_news_message(chat_id, title, announce, link, ticker)
 
 def get_user_list_for_news_broadcast(ticker: str):
-    db_ticker_name = ticker.upper() + '_ticker'
+    db_ticker_name = f'{ticker.upper()}_ticker'
     db_cursor.execute(f'SELECT chat_id FROM Users WHERE {db_ticker_name} = 1')
     return db_cursor.fetchone()
 
@@ -145,7 +145,8 @@ def handle_news(titles, announces, links, ticker: str):
             announce = announces[i].get_text()
         link = links[i]['href']
         today_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        db_cursor.execute('INSERT OR IGNORE INTO News (link, title, announce, date, ticker) VALUES (?, ?, ?, ?, ?)', (link, title, announce, today_date, ticker))
+        db_cursor.execute('INSERT OR IGNORE INTO News (link, title, announce, date, ticker) VALUES (?, ?, ?, ?, ?)',
+            (link, title, announce, today_date, ticker))
         if db_cursor.rowcount > 0:
             print(f'New: {title}')
             user_list = get_user_list_for_news_broadcast(ticker)
@@ -162,7 +163,7 @@ def safe_request(url, **kwargs):
     return requests.get(url, **kwargs)
 
 def parse_web_and_insert_to_db(ticker: str):
-    url = f'{domain_name}/invest/etfs/{ticker}/news/'
+    url = f'{DOMAIN_NAME}/invest/etfs/{ticker}/news/'
     page = safe_request(url)
     soup = BeautifulSoup(page.content, 'html.parser')
     wrappers = soup.select('div[class*="NewsItem__wrapper_"]')
@@ -174,7 +175,7 @@ def parse_web_and_insert_to_db(ticker: str):
     # print_news_table()
 
 def update_news():
-    tickers = supported_tickers.split(' ')
+    tickers = SUPPORTED_TICKERS.split(' ')
     for ticker in tickers:
         parse_web_and_insert_to_db(ticker)
 
@@ -184,75 +185,75 @@ def update_news_async(f_stop):
         # call update_news_async() again in 1800 seconds
         threading.Timer(1800, update_news_async, [f_stop]).start()
 
-@bot.message_handler(commands=["start"])
-def handle_start_msg(msg, res=False):
-    bot.send_message(msg.chat.id, "Hi " + msg.chat.first_name)
+@bot.message_handler(commands=['start'])
+def handle_start_msg(msg):
+    bot.send_message(msg.chat.id, f'Привет, {msg.chat.first_name}')
     insert_new_user_in_db(msg.chat.id, msg.chat.first_name)
     print_users_table()
 
-@bot.message_handler(commands=["update"])
-def handle_update_msg(msg, res=False):
-    if msg.chat.id != admin_chat_id:
+@bot.message_handler(commands=['update'])
+def handle_update_msg(msg):
+    if msg.chat.id != ADMIN_CHAT_ID:
         return
     update_news()
 
-@bot.message_handler(commands=["stop"])
-def handle_stop_msg(msg, res=False):
-    bot.send_message(msg.chat.id, f'Bye {msg.chat.first_name}')
+@bot.message_handler(commands=['stop'])
+def handle_stop_msg(msg):
+    bot.send_message(msg.chat.id, f'Пока, {msg.chat.first_name}')
     delete_user_from_db(msg.chat.id)
 
-@bot.message_handler(commands=["add"])
-def handle_add_msg(msg, res=False):
+@bot.message_handler(commands=['add'])
+def handle_add_msg(msg):
     args = extract_args(msg.text)
     if len(args) > 0:
         ticker=args[0]
         if not is_supported_ticker(ticker):
-            bot.send_message(msg.chat.id, "Unknown ticker " + ticker)
+            bot.send_message(msg.chat.id, f'Неизвестный тикер {ticker}\nСписок поддерживаемых тикеров: {SUPPORTED_TICKERS}')
             return
         if set_user_ticker(msg.chat.id, ticker, 1):
-            bot.send_message(msg.chat.id, "Tickers have been updated")
+            bot.send_message(msg.chat.id, 'Список тикеров обновлен')
     else:
-        bot.send_message(msg.chat.id, "Use /add <ticker>")
+        bot.send_message(msg.chat.id, 'Для добавления тикера используйте команду /add <ticker>')
 
-@bot.message_handler(commands=["remove"])
-def handle_remove_msg(msg, res=False):
+@bot.message_handler(commands=['remove'])
+def handle_remove_msg(msg):
     args = extract_args(msg.text)
     if len(args) > 0:
         ticker=args[0]
         if not is_supported_ticker(ticker):
-            bot.send_message(msg.chat.id, "Unknown ticker " + ticker)
+            bot.send_message(msg.chat.id, f'Неизвестный тикер {ticker}\nСписок поддерживаемых тикеров: {SUPPORTED_TICKERS}')
             return
         if set_user_ticker(msg.chat.id, ticker, 0):
-            bot.send_message(msg.chat.id, "Tickers have been updated")
+            bot.send_message(msg.chat.id, 'Список тикеров обновлен')
         else:
-            bot.send_message(msg.chat.id, "Unknown ticker " + ticker)
+            bot.send_message(msg.chat.id, f'Неизвестный тикер {ticker}\nСписок поддерживаемых тикеров: {SUPPORTED_TICKERS}')
     else:
-        bot.send_message(msg.chat.id, "Use /remove <ticker>")
+        bot.send_message(msg.chat.id, 'Для удаления тикера используйте команду /remove <ticker>')
 
-@bot.message_handler(commands=["help"])
-def handle_help_msg(msg, res=False):
-    text = "Команды:\n"
-    text += "/add <тикер>\n"
-    text += "/remove <тикер>\n\n"
-    text += "Список поддерживаемых тикеров: " + supported_tickers
+@bot.message_handler(commands=['help'])
+def handle_help_msg(msg):
+    text = 'Команды:\n'
+    text += '/add <тикер>\n'
+    text += '/remove <тикер>\n\n'
+    text += f'Список поддерживаемых тикеров: {SUPPORTED_TICKERS}'
     bot.send_message(msg.chat.id, text)
 
-@bot.message_handler(commands=["clear"])
-def handle_clear_msg(msg, res=False):
-    if msg.chat.id != admin_chat_id:
+@bot.message_handler(commands=['clear'])
+def handle_clear_msg(msg):
+    if msg.chat.id != ADMIN_CHAT_ID:
         return
 
     args = extract_args(msg.text)
     if len(args) <= 0:
         return
-    if args[0] == "users":
+    if args[0] == 'users':
         clear_users_db()
-        bot.send_message(msg.chat.id, "Users database cleared")
-    if args[0] == "news":
+        bot.send_message(msg.chat.id, 'Users database cleared')
+    if args[0] == 'news':
         clear_news_db()
-        bot.send_message(msg.chat.id, "News database cleared")
+        bot.send_message(msg.chat.id, 'News database cleared')
 
-assert sqlite3.threadsafety == 1, "Database is not threadsafe"
+assert sqlite3.threadsafety == 1, 'Database is not threadsafe'
 
 create_db()
 
@@ -260,7 +261,7 @@ f_stop = threading.Event()
 # start calling update_news_async now and every 1800 sec thereafter
 update_news_async(f_stop)
 
-print("bot online")
+print('bot online')
 bot.infinity_polling(timeout=10, long_polling_timeout=5)
 
 f_stop.set()
